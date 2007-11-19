@@ -37,52 +37,92 @@ struct gpt_header {
     // Remaining bytes must all be zero.
 };
 
-void read_lba(uint64_t index, lba *data);
+void tweak(int fd);
+void read_lba(int fd, uint64_t index, lba *data);
 void hexdump_lba(lba *data);
 bool validate_gpt_header(lba *header);
 uint32_t crc32(uint32_t *data, size_t length);
 
 
-int fd;
-
 
 int main(int argc, char **argv) {
-    if(argc != 2) {
-	fprintf(stderr, "Usage: gpt-tweak device|file\n");
+    cutoff_detail = 5;
+    describe_failures = 1;
+    describe_successes = 1;
+    describe_trivia = 1;
+
+    char *devicename = NULL;
+
+    bool usage_okay = true;
+    int i;
+    for(i = 1; i < argc; i++) {
+	if(argv[i][0] == '-') {
+	    int j;
+	    for(j = 1; argv[i][j]; j++) {
+		char c = argv[i][j];
+		if(isdigit(c)) {
+		    cutoff_detail = c - '0';
+		} else switch(argv[i][j]) {
+		case 'F': describe_failures = true; break;
+		case 'f': describe_failures = false; break;
+		case 'S': describe_successes = true; break;
+		case 's': describe_successes = false; break;
+		case 'T': describe_trivia = true; break;
+		case 't': describe_trivia = false; break;
+		default: usage_okay = false; break;
+		}
+	    }
+	} else if(!devicename) {
+	    devicename = argv[i];
+	} else {
+	    usage_okay = false;
+	}
+    }
+    if(!devicename) usage_okay = false;
+    if(!usage_okay) {
+	fprintf(stderr, "Usage: gpt-tweak [-fstFST0123456789] device|file\n");
 	return 1;
     }
+
+    printf("Okay, my verbosity is %c%c%c%i.  Just so you know.\n",
+	   describe_failures ? 'F' : 'f',
+	   describe_successes ? 'S' : 's',
+	   describe_trivia ? 'T' : 't',
+	   cutoff_detail);
+    current_detail = 0;
     
-    char *devicename = argv[1];
-    fd = open64(devicename, O_RDONLY);
+    int fd = open64(devicename, O_RDONLY);
     if(fd == -1) {
 	fprintf(stderr, "Unable to open %s: %s\n", devicename, strerror(errno));
 	return 1;
     }
 
-    describe_failures = 1;
-    describe_successes = 0;
-    describe_trivia = 0;
+    tweak(fd);
 
+    close(fd);
+
+    return 0;
+}
+
+
+void tweak(int fd) {
     /*
     lba legacy_mbr;
-    read_lba(0, &legacy_mbr);
+    read_lba(fd, 0, &legacy_mbr);
     printf("Legacy MBR:\n");
     hexdump_lba(&legacy_mbr);
     */
 
     lba header;
-    read_lba(1, &header);
-    //printf("Header:\n");
-    //hexdump_lba(&header);
-    if(validate_gpt_header(&header))
-	describe_trivium("Yup, the header validates!  Well, that's something.\n");
-
-    
-    return 0;
+    read_lba(fd, 1, &header);
+    if(!validate_gpt_header(&header)) {
+	describe_failure("The header doesn't validate.\n");
+	return;
+    } else describe_success("The header validates.\n");
 }
 
 
-void read_lba(uint64_t index, lba *data) {
+void read_lba(int fd, uint64_t index, lba *data) {
     ssize_t result = pread64(fd, data, sizeof(lba), index*sizeof(lba));
     if(result == -1) {
 	fprintf(stderr, "Unable to read LBA %Li: %s\n", index, strerror(errno));
@@ -128,6 +168,8 @@ XXXX:  aaaa aaaa aaaa aaaa  aaaa aaaa aaaa aaaa    ................
 
 
 bool validate_gpt_header(lba *gpt_header_lba) {
+    current_detail++;
+    
     struct gpt_header *header = (struct gpt_header *) gpt_header_lba;
     bool result = true;
     
@@ -141,8 +183,6 @@ bool validate_gpt_header(lba *gpt_header_lba) {
 	result = false;
     } else describe_success("Header-format revision okay.\n");
 
-    describe_trivium("The header size is %li bytes.\n", header->header_size);
-
     if(header->reserved != 0x00000000) {
 	describe_failure("GPT header reserved field is nonzero.\n");
 	result = false;
@@ -153,6 +193,32 @@ bool validate_gpt_header(lba *gpt_header_lba) {
 	result = false;
     } else describe_success("Header self-LBA okay.\n");
 
+    size_t i;
+    for(i = header->header_size; i < LBA_SIZE; i++)
+	if((*gpt_header_lba)[i] != 0x00) break;
+    if(i != LBA_SIZE) {
+	describe_failure("GPT header followed by trailing garbage at offset %li.\n", i);
+	result = false;
+    } else describe_success("GPT header correctly followed by zeroes.\n");
+
+    lba header_copy;
+    memcpy(header_copy, gpt_header_lba, sizeof(lba));
+    ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
+    uint32_t old_header_crc32 = header->header_crc32;
+    size_t size_to_checksum = header->header_size;
+    if(size_to_checksum > LBA_SIZE) size_to_checksum = LBA_SIZE;
+    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, size_to_checksum);
+
+    if(old_header_crc32 != new_header_crc32) {
+	describe_failure("Header's self-checksum is invalid.\n");
+	result = false;
+    } else describe_success("Header's self-checksum is valid.\n");
+
+    if(header->header_size == 92)
+	describe_trivium("The header size is %li bytes, which is the original standard.\n",
+			 header->header_size);
+    else
+	describe_trivium("The header size is %li bytes, which is NOT the original standard.\n");
     describe_trivium("Alternate LBA %Li, usable LBAs from %Li to %Li inclusive.\n",
 		     header->alternate_lba,
 		     header->first_usable_lba,
@@ -162,26 +228,18 @@ bool validate_gpt_header(lba *gpt_header_lba) {
 		     header->partition_entry_lba,
 		     header->number_of_partition_entries,
 		     header->size_of_partition_entry);
-
+    size_t total_entry_size
+	= header->number_of_partition_entries * header->size_of_partition_entry;
+    if(total_entry_size % LBA_SIZE == 0)
+	describe_trivium("The entries occupy %li LBAs exactly.\n",
+			 total_entry_size / LBA_SIZE);
+    else
+	describe_trivium("The entries don't end on an LBA boundary, occupying %f LBAs.\n",
+			 ((float) total_entry_size) / ((float) LBA_SIZE));
     describe_trivium("Header identifies its own CRC32 as 0x%08x and the entries' as 0x%08x.\n",
 		     header->header_crc32,
 		     header->partition_entry_array_crc32);
 
-    lba header_copy;
-    memcpy(header_copy, gpt_header_lba, sizeof(lba));
-    ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
-    uint32_t old_header_crc32 = header->header_crc32;
-    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, header->header_size);
-
-    printf("\nShould be 0x%08x; is 0x%08x.\n",
-	   old_header_crc32, new_header_crc32);
-    if(old_header_crc32 == new_header_crc32) {
-	int i;
-	for(i = 0; i < 10; i++)
-	    printf("*** YES!  YES!  YES!  You fixed the CRC32!\n");
-    } else printf("*** Sorry.  Hang in there.  It's something simple.\n");
-
-    header->header_crc32 = old_header_crc32;
-    
+    current_detail--;
     return result;
 }

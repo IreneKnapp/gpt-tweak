@@ -12,4 +12,5 @@
 extern uint32_t efi_crc32(uint8_t *buf, size_t len);
 
 // ui.c
-extern int describe_failures, describe_successes, describe_trivia;
+extern int current_detail, cutoff_detail, describe_failures, describe_successes,
+    describe_trivia;
