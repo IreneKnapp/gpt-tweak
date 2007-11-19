@@ -8,6 +8,8 @@
 #include <unistd.h>
 
 
+extern uint32_t efi_crc32(uint8_t *buf, size_t len);
+
 typedef uint8_t lba[512];
 typedef uint8_t uuid[16];
 
@@ -159,22 +161,17 @@ void validate_gpt_header(struct gpt_header *header) {
 	   header->header_crc32,
 	   header->partition_entry_array_crc32);
 
+    uint32_t old_header_crc32 = header->header_crc32;
     header->header_crc32 = 0x00000000;
-    uint32_t header_crc32 = crc32(header, header->header_size);
-    //    header_crc32 -= header->header_crc32;
-    printf("The computed CRC32 for the header is 0x%08x.\n", header_crc32);
+    uint32_t new_header_crc32 = efi_crc32((uint8_t *) header, header->header_size/4);
+
+    printf("\nShould be 0x%08x; is 0x%08x.\n",
+	   old_header_crc32, new_header_crc32);
+    if(old_header_crc32 == new_header_crc32) {
+	int i;
+	for(i = 0; i < 10; i++)
+	    printf("*** YES!  YES!  YES!  You fixed the CRC32!\n");
+    } else printf("*** Sorry.  Hang in there.  It's something simple.\n");
     
-    printf("Yup, the header validates!  Well, that's something.\n");
-}
-
-
-uint32_t crc32(uint32_t *data, size_t length) {
-    uint32_t result = 0;
-    
-    int i;
-    for(i = 0; 4*i < length; i++) {
-	result ^= data[i];
-    }
-
-    return result;
+    //printf("Yup, the header validates!  Well, that's something.\n");
 }
