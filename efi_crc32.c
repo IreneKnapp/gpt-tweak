@@ -112,11 +112,11 @@ uint32_t efi_crc32(uint8_t *buf, size_t len) {
     size_t i;
     register uint32_t crc32val;
 
-    crc32val = 0x00000000;
+    crc32val = 0xFFFFFFFF;
     for (i = 0;  i < len;  i ++) {
 	crc32val =
 	    crc32_tab[(crc32val ^ buf[i]) & 0xff] ^
 	    (crc32val >> 8);
     }
-    return crc32val;
+    return crc32val ^ 0xFFFFFFFF;
 }

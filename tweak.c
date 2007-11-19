@@ -171,7 +171,7 @@ bool validate_gpt_header(lba *gpt_header_lba) {
     memcpy(header_copy, gpt_header_lba, sizeof(lba));
     ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
     uint32_t old_header_crc32 = header->header_crc32;
-    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, (header->header_size)/4);
+    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, header->header_size);
 
     printf("\nShould be 0x%08x; is 0x%08x.\n",
 	   old_header_crc32, new_header_crc32);
