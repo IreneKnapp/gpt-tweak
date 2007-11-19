@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
 	   describe_successes ? 'S' : 's',
 	   describe_trivia ? 'T' : 't',
 	   cutoff_detail);
-    current_detail = 0;
+    current_detail = 1;
     
     int fd = open64(devicename, O_RDONLY);
     if(fd == -1) {
