@@ -1,16 +1,11 @@
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include "tweak.h"
 
+#define LBA_SIZE 512
 
-extern uint32_t efi_crc32(uint8_t *buf, size_t len);
-
-typedef uint8_t lba[512];
+#define true 1
+#define false 0
+typedef uint8_t bool;
+typedef uint8_t lba[LBA_SIZE];
 typedef uint8_t uuid[16];
 
 struct uuid {
@@ -42,12 +37,13 @@ struct gpt_header {
     // Remaining bytes must all be zero.
 };
 
-int fd;
-
 void read_lba(uint64_t index, lba *data);
 void hexdump_lba(lba *data);
-void validate_gpt_header(struct gpt_header *header);
+bool validate_gpt_header(lba *header);
 uint32_t crc32(uint32_t *data, size_t length);
+
+
+int fd;
 
 
 int main(int argc, char **argv) {
@@ -63,6 +59,10 @@ int main(int argc, char **argv) {
 	return 1;
     }
 
+    describe_failures = 1;
+    describe_successes = 0;
+    describe_trivia = 0;
+
     /*
     lba legacy_mbr;
     read_lba(0, &legacy_mbr);
@@ -74,7 +74,9 @@ int main(int argc, char **argv) {
     read_lba(1, &header);
     //printf("Header:\n");
     //hexdump_lba(&header);
-    validate_gpt_header((struct gpt_header *) &header);
+    if(validate_gpt_header(&header))
+	describe_trivium("Yup, the header validates!  Well, that's something.\n");
+
     
     return 0;
 }
@@ -96,7 +98,7 @@ void read_lba(uint64_t index, lba *data) {
 void hexdump_lba(lba *data) {
     int i;
 
-    for(i = 0; i < 512; i++) {
+    for(i = 0; i < LBA_SIZE; i++) {
 	if(i % 16 == 0) printf("%04X:  ", i);
 	else if(i % 16 == 8) printf("  ");
 	else if(i % 2 == 0) printf(" ");
@@ -125,45 +127,51 @@ XXXX:  aaaa aaaa aaaa aaaa  aaaa aaaa aaaa aaaa    ................
 */
 
 
-void validate_gpt_header(struct gpt_header *header) {
+bool validate_gpt_header(lba *gpt_header_lba) {
+    struct gpt_header *header = (struct gpt_header *) gpt_header_lba;
+    bool result = true;
+    
     if(strncmp(header->signature, "EFI PART", sizeof(header->signature))) {
-	fprintf(stderr, "GPT header has wrong magic number.\n");
-	exit(1);
-    } else printf("Magic number OK.\n");
+	describe_failure("GPT header has wrong magic number.\n");
+	result = false;
+    } else describe_success("Magic number OK.\n");
 
     if(header->revision != 0x00010000) {
-	fprintf(stderr, "GPT header claims wrong header-format revision.\n");
-	exit(1);
-    } else printf("Header-format revision okay.\n");
+	describe_failure("GPT header claims wrong header-format revision.\n");
+	result = false;
+    } else describe_success("Header-format revision okay.\n");
 
-    printf("The header size is %li bytes.\n", header->header_size);
+    describe_trivium("The header size is %li bytes.\n", header->header_size);
 
     if(header->reserved != 0x00000000) {
-	fprintf(stderr, "GPT header reserved field is nonzero.\n");
-	exit(1);
-    } else printf("Header reserved field okay.\n");
+	describe_failure("GPT header reserved field is nonzero.\n");
+	result = false;
+    } else describe_success("Header reserved field okay.\n");
 
     if(header->my_lba != 1) {
-	fprintf(stderr, "GPT header mis-identifies its own LBA.\n");
-	exit(1);
-    } else printf("Header self-LBA okay.\n");
+	describe_failure("GPT header mis-identifies its own LBA.\n");
+	result = false;
+    } else describe_success("Header self-LBA okay.\n");
 
-    printf("Alternate LBA %Li, usable LBAs from %Li to %Li inclusive.\n",
-	   header->alternate_lba,
-	   header->first_usable_lba,
-	   header->last_usable_lba);
-    printf("Partition entries start at LBA %Li; there are %li entries of %li bytes each.\n",
-	   header->partition_entry_lba,
-	   header->number_of_partition_entries,
-	   header->size_of_partition_entry);
+    describe_trivium("Alternate LBA %Li, usable LBAs from %Li to %Li inclusive.\n",
+		     header->alternate_lba,
+		     header->first_usable_lba,
+		     header->last_usable_lba);
+    describe_trivium("Partition entries start at LBA %Li; "
+		     "there are %li entries of %li bytes each.\n",
+		     header->partition_entry_lba,
+		     header->number_of_partition_entries,
+		     header->size_of_partition_entry);
 
-    printf("Header identifies its own CRC32 as 0x%08x and the entries' as 0x%08x.\n",
-	   header->header_crc32,
-	   header->partition_entry_array_crc32);
+    describe_trivium("Header identifies its own CRC32 as 0x%08x and the entries' as 0x%08x.\n",
+		     header->header_crc32,
+		     header->partition_entry_array_crc32);
 
+    lba header_copy;
+    memcpy(header_copy, gpt_header_lba, sizeof(lba));
+    ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
     uint32_t old_header_crc32 = header->header_crc32;
-    header->header_crc32 = 0x00000000;
-    uint32_t new_header_crc32 = efi_crc32((uint8_t *) header, header->header_size/4);
+    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, (header->header_size)/4);
 
     printf("\nShould be 0x%08x; is 0x%08x.\n",
 	   old_header_crc32, new_header_crc32);
@@ -172,6 +180,8 @@ void validate_gpt_header(struct gpt_header *header) {
 	for(i = 0; i < 10; i++)
 	    printf("*** YES!  YES!  YES!  You fixed the CRC32!\n");
     } else printf("*** Sorry.  Hang in there.  It's something simple.\n");
+
+    header->header_crc32 = old_header_crc32;
     
-    //printf("Yup, the header validates!  Well, that's something.\n");
+    return result;
 }
