@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
 	return 1;
     }
 
-    printf("Okay, my verbosity is %c%c%c%i.  Just so you know.\n",
+    printf("Okay, my verbosity is -%c%c%c%i.  Just so you know.\n\n",
 	   describe_failures ? 'F' : 'f',
 	   describe_successes ? 'S' : 's',
 	   describe_trivia ? 'T' : 't',
