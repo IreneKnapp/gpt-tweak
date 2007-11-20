@@ -45,12 +45,27 @@ struct partition_entry {
     uint8_t partition_name[72];
 };
 
+struct predefined_type_uuid {
+    uuid uuid;
+    char name[32];
+};
+
+struct predefined_type_uuid predefined_type_uuids[] = {
+    { { 0xC1, 0x2A, 0x73, 0x28, 0xF8, 0x1F, 0x11, 0xd2,
+	0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B },
+      "EFI system partition" },
+    { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+      "Empty partition" }
+};
+
 void tweak(int fd);
 void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header);
 uint64_t total_entry_size(struct gpt_header *header);
+char *get_type_uuid_name(uuid uuid);
 void swab_and_copy_uuid(uuid *target, uuid *source);
 void swab_uuid(uuid *uuid);
 void swab32(uint8_t *bytes);
@@ -189,6 +204,11 @@ void tweak(int fd) {
 	
 	describe_trivium("Partion entry %Li, type uuid %s:\n",
 			 i, uuid_to_ascii(type_uuid));
+	char *type_name = get_type_uuid_name(type_uuid);
+	if(type_name)
+	    describe_trivium("  That's %s.\n", type_name);
+	else
+	    describe_trivium("  That's an unknown type, to me.\n");
 	describe_trivium("  Partition uuid %s.\n",
 			 uuid_to_ascii(partition_uuid));
 	describe_trivium("  From lba %Li to %Li, attributes 0x%016Lx.\n",
@@ -349,6 +369,22 @@ uint64_t total_entry_size(struct gpt_header *header) {
 }
 
 
+char *get_type_uuid_name(uuid to_be_identified) {
+    uuid null_uuid;
+
+    bzero(&null_uuid, sizeof(null_uuid));
+    
+    struct predefined_type_uuid *i = predefined_type_uuids;
+    while(1) {
+	if(!memcmp(to_be_identified, i->uuid, sizeof(uuid)))
+	    return &i->name;
+	if(!memcmp(null_uuid, i->uuid, sizeof(uuid)))
+	    return NULL;
+	i++;
+    }
+}
+
+
 void swab_and_copy_uuid(uuid *target, uuid *source) {
     memcpy(target, source, sizeof(uuid));
     swab_uuid(target);
@@ -360,7 +396,6 @@ void swab_uuid(uuid *uuid) {
     swab32(bytes);
     swab16(bytes+4);
     swab16(bytes+6);
-    swab16(bytes+8);
 }
 
 
