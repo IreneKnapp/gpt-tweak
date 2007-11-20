@@ -40,7 +40,7 @@ void tweak(int fd);
 void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 bool validate_gpt_header(block *header);
-uint32_t crc32(uint32_t *data, size_t length);
+uint64_t total_entry_size(struct gpt_header *header);
 
 
 
@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
 	return 1;
     }
 
-    printf("Okay, my verbosity is -%c%c%c%i.  Just so you know.\n\n",
+    printf("Okay, my verbosity is -%c%c%c%i.  Just so you know.\n",
 	   describe_failures ? 'F' : 'f',
 	   describe_successes ? 'S' : 's',
 	   describe_trivia ? 'T' : 't',
@@ -112,6 +112,8 @@ void tweak(int fd) {
     hexdump_block(&legacy_mbr);
     */
 
+    printf("\nLoading the header.\n");
+    
     block header_block;
     read_block(fd, 1, &header_block);
     if(!validate_gpt_header(&header_block)) {
@@ -120,7 +122,36 @@ void tweak(int fd) {
     } else describe_success("The header validates.\n");
 
     struct gpt_header *header = (struct gpt_header *) &header_block;
+
+    printf("\nLoading the entry array.\n");
+
+    uint64_t size = total_entry_size(header);
+    lba first_entry_block = header->partition_entry_lba;
+    lba last_full_entry_block = header->partition_entry_lba + size / sizeof(block) - 1;
+    lba n_entry_blocks = size / sizeof(block);
+    if(size % sizeof(block) > 0) n_entry_blocks++;
+
+    block *entry_blocks = malloc(n_entry_blocks * sizeof(block));
+       
+    lba lba, i;
+    uint32_t array_crc = efi_crc32_start(NULL, 0);
+    for(i = 0, lba = first_entry_block; lba <= last_full_entry_block; lba++, i++) {
+	read_block(fd, lba, &(entry_blocks[i]));
+	array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
+				       sizeof(block), array_crc);
+    }
+    if(size % sizeof(block) != 0) {
+	describe_trivium("There's a last odd block in the entry array, of size %Li.\n");
+	read_block(fd, lba, &(entry_blocks[i]));
+	array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
+				       size % sizeof(block), array_crc);
+    }
+    array_crc = efi_crc32_end(array_crc);
     
+    if(array_crc != header->partition_entry_array_crc32) {
+	describe_failure("The entry array CRC32 doesn't validate.\n");
+	return;
+    } else describe_success("The entry array CRC32 validates.\n");
 }
 
 
@@ -178,7 +209,7 @@ bool validate_gpt_header(block *header_block) {
     if(strncmp(header->signature, "EFI PART", sizeof(header->signature))) {
 	describe_failure("GPT header has wrong magic number.\n");
 	result = false;
-    } else describe_success("Magic number OK.\n");
+    } else describe_success("Magic number okay.\n");
 
     if(header->revision != 0x00010000) {
 	describe_failure("GPT header claims wrong header-format revision.\n");
@@ -230,18 +261,24 @@ bool validate_gpt_header(block *header_block) {
 		     header->partition_entry_lba,
 		     header->number_of_partition_entries,
 		     header->size_of_partition_entry);
-    size_t total_entry_size
-	= header->number_of_partition_entries * header->size_of_partition_entry;
-    if(total_entry_size % sizeof(block) == 0)
+    
+    uint64_t size = total_entry_size(header);
+    if(size % sizeof(block) == 0)
 	describe_trivium("The entries occupy %li LBAs exactly.\n",
-			 total_entry_size / sizeof(block));
+			 size / sizeof(block));
     else
-	describe_trivium("The entries don't end on an LBA boundary, occupying %f LBAs.\n",
-			 ((float) total_entry_size) / ((float) sizeof(block)));
+	describe_trivium("The entries occupy %li LBAs completely, plus %li bytes more.\n",
+			 size / sizeof(block), size % sizeof(block));
+    
     describe_trivium("Header identifies its own CRC32 as 0x%08x and the entries' as 0x%08x.\n",
 		     header->header_crc32,
 		     header->partition_entry_array_crc32);
 
     current_detail--;
     return result;
+}
+
+
+uint64_t total_entry_size(struct gpt_header *header) {
+    return header->number_of_partition_entries * header->size_of_partition_entry;
 }
