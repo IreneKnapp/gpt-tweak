@@ -64,6 +64,7 @@ void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header);
+uint32_t compute_header_crc32(block *header);
 uint64_t total_entry_size(struct gpt_header *header);
 char *get_type_uuid_name(uuid uuid);
 void swab_and_copy_uuid(uuid *target, uuid *source);
@@ -319,13 +320,8 @@ bool validate_gpt_header(block *header_block) {
 	result = false;
     } else describe_success("GPT header correctly followed by zeroes.\n");
 
-    block header_copy;
-    memcpy(header_copy, header_block, sizeof(block));
-    ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
     uint32_t old_header_crc32 = header->header_crc32;
-    size_t size_to_checksum = header->header_size;
-    if(size_to_checksum > sizeof(block)) size_to_checksum = sizeof(block);
-    uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, size_to_checksum);
+    uint32_t new_header_crc32 = compute_header_crc32(header_block);
 
     if(old_header_crc32 != new_header_crc32) {
 	describe_failure("Header's self-checksum is invalid.\n");
@@ -361,6 +357,21 @@ bool validate_gpt_header(block *header_block) {
 
     current_detail--;
     return result;
+}
+
+
+uint32_t compute_header_crc32(block *header_block) {
+    block header_copy;
+    memcpy(&header_copy, header_block, sizeof(block));
+    
+    ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
+
+    struct gpt_header *header = (struct gpt_header *) header_block;
+    size_t size_to_checksum = header->header_size;
+    if(size_to_checksum > sizeof(block))
+	size_to_checksum = sizeof(block);
+    
+    return efi_crc32((uint8_t *) &header_copy, size_to_checksum);
 }
 
 
