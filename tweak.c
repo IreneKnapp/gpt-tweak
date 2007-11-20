@@ -307,7 +307,7 @@ bool validate_gpt_header(block *header_block) {
     } else describe_success("Header reserved field okay.\n");
 
     if(header->my_lba != 1) {
-	describe_failure("GPT header mis-identifies its own LBA.\n");
+	describe_failure("GPT header mis-identifies its own LBA, as %Li.\n", header->my_lba);
 	result = false;
     } else describe_success("Header self-LBA okay.\n");
 
