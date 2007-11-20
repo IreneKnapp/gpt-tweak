@@ -64,7 +64,10 @@ void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header);
+block *load_entry_array(int fd, struct gpt_header *header);
+bool validate_entry_array(struct gpt_header *header, block *entry_blocks);
 uint32_t compute_header_crc32(block *header);
+uint32_t compute_entry_crc32(struct gpt_header *header, block *entry_blocks);
 uint64_t total_entry_size(struct gpt_header *header);
 char *get_type_uuid_name(uuid uuid);
 void swab_and_copy_uuid(uuid *target, uuid *source);
@@ -155,70 +158,12 @@ void tweak(int fd) {
 
     printf("\nLoading the entry array.\n");
 
-    uint64_t size = total_entry_size(header);
-    lba first_entry_block = header->partition_entry_lba;
-    lba last_full_entry_block = header->partition_entry_lba + size / sizeof(block) - 1;
-    lba n_entry_blocks = size / sizeof(block);
-    if(size % sizeof(block) > 0) n_entry_blocks++;
+    block *entry_blocks = load_entry_array(fd, header);
 
-    block *entry_blocks = malloc(n_entry_blocks * sizeof(block));
-       
-    lba entry_lba, i;
-    uint32_t array_crc = efi_crc32_start(NULL, 0);
-    for(i = 0, entry_lba = first_entry_block;
-	entry_lba <= last_full_entry_block;
-	entry_lba++, i++)
-	{
-	    read_block(fd, entry_lba, &(entry_blocks[i]));
-	    array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
-					   sizeof(block), array_crc);
-	}
-    if(size % sizeof(block) != 0) {
-	describe_trivium("There's a last odd block in the entry array, of size %Li.\n");
-	read_block(fd, entry_lba, &(entry_blocks[i]));
-	array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
-				       size % sizeof(block), array_crc);
-    }
-    array_crc = efi_crc32_end(array_crc);
-    
-    if(array_crc != header->partition_entry_array_crc32) {
-	describe_failure("The entry array CRC32 doesn't validate.\n");
+    if(!validate_entry_array(header, entry_blocks)) {
+	describe_failure("The entry array doesn't validate.\n");
 	return;
-    } else describe_success("The entry array CRC32 validates.\n");
-
-    lba n_zero_entries = 0;
-    for(i = 0; i < header->number_of_partition_entries; i++) {
-	struct partition_entry *entry
-	    = (struct partition_entry *) (((uint8_t *) entry_blocks)
-					  + i*header->size_of_partition_entry);
-	lba j;
-	for(j = 0; j < header->size_of_partition_entry; j++)
-	    if(((uint8_t *) entry)[j] != 0) break;
-	if(j == header->size_of_partition_entry) {
-	    n_zero_entries++;
-	    continue;
-	}
-
-	uuid type_uuid, partition_uuid;
-	swab_and_copy_uuid(&type_uuid, &entry->partition_type_uuid);
-	swab_and_copy_uuid(&partition_uuid, &entry->unique_partition_uuid);
-	
-	describe_trivium("Partition entry %Li, type uuid %s:\n",
-			 i, uuid_to_ascii(type_uuid));
-	char *type_name = get_type_uuid_name(type_uuid);
-	if(type_name)
-	    describe_trivium("  That's %s.\n", type_name);
-	else
-	    describe_trivium("  That's an unknown type, to me.\n");
-	describe_trivium("  Partition uuid %s.\n",
-			 uuid_to_ascii(partition_uuid));
-	describe_trivium("  From lba %Li to %Li, attributes 0x%016Lx.\n",
-			 entry->starting_lba, entry->ending_lba,
-			 entry->attributes);
-	describe_trivium("  And it has a name, too.\n");
-    }
-    describe_trivium("There are a total of %Li entries which are just zeroes.\n",
-		     n_zero_entries);
+    } else describe_success("The entry array validates.\n");
 }
 
 
@@ -360,6 +305,81 @@ bool validate_gpt_header(block *header_block) {
 }
 
 
+block *load_entry_array(int fd, struct gpt_header *header) {
+    uint64_t size = total_entry_size(header);
+    lba first_entry_block = header->partition_entry_lba;
+    lba last_full_entry_block = header->partition_entry_lba + size / sizeof(block) - 1;
+    lba n_entry_blocks = size / sizeof(block);
+    if(size % sizeof(block) > 0) n_entry_blocks++;
+
+    block *entry_blocks = malloc(n_entry_blocks * sizeof(block));
+       
+    lba entry_lba, i;
+    for(i = 0, entry_lba = first_entry_block;
+	entry_lba <= last_full_entry_block;
+	entry_lba++, i++)
+	{
+	    read_block(fd, entry_lba, &(entry_blocks[i]));
+	}
+    if(size % sizeof(block) != 0) {
+	describe_trivium("There's a last odd block in the entry array, of size %Li.\n");
+	read_block(fd, entry_lba, &(entry_blocks[i]));
+    }
+
+    return entry_blocks;
+}
+
+
+bool validate_entry_array(struct gpt_header *header, block *entry_blocks) {
+    current_detail++;
+    
+    bool result = true;
+    
+    if(compute_entry_crc32(header, entry_blocks) != header->partition_entry_array_crc32) {
+	describe_failure("The entry array CRC32 doesn't validate.\n");
+	result = false;
+    } else describe_success("The entry array CRC32 validates.\n");
+
+    lba n_zero_entries = 0;
+    lba i;
+    for(i = 0; i < header->number_of_partition_entries; i++) {
+	struct partition_entry *entry
+	    = (struct partition_entry *) (((uint8_t *) entry_blocks)
+					  + i*header->size_of_partition_entry);
+	lba j;
+	for(j = 0; j < header->size_of_partition_entry; j++)
+	    if(((uint8_t *) entry)[j] != 0) break;
+	if(j == header->size_of_partition_entry) {
+	    n_zero_entries++;
+	    continue;
+	}
+
+	uuid type_uuid, partition_uuid;
+	swab_and_copy_uuid(&type_uuid, &entry->partition_type_uuid);
+	swab_and_copy_uuid(&partition_uuid, &entry->unique_partition_uuid);
+	
+	describe_trivium("Partition entry %Li, type uuid %s:\n",
+			 i, uuid_to_ascii(type_uuid));
+	char *type_name = get_type_uuid_name(type_uuid);
+	if(type_name)
+	    describe_trivium("  That's %s.\n", type_name);
+	else
+	    describe_trivium("  That's an unknown type, to me.\n");
+	describe_trivium("  Partition uuid %s.\n",
+			 uuid_to_ascii(partition_uuid));
+	describe_trivium("  From lba %Li to %Li, attributes 0x%016Lx.\n",
+			 entry->starting_lba, entry->ending_lba,
+			 entry->attributes);
+	describe_trivium("  And it has a name, too.\n");
+    }
+    describe_trivium("There are a total of %Li entries which are just zeroes.\n",
+		     n_zero_entries);
+
+    current_detail--;
+    return result;
+}
+
+
 uint32_t compute_header_crc32(block *header_block) {
     block header_copy;
     memcpy(&header_copy, header_block, sizeof(block));
@@ -372,6 +392,11 @@ uint32_t compute_header_crc32(block *header_block) {
 	size_to_checksum = sizeof(block);
     
     return efi_crc32((uint8_t *) &header_copy, size_to_checksum);
+}
+
+
+uint32_t compute_entry_crc32(struct gpt_header *header, block *entry_blocks) {
+    return efi_crc32((uint8_t *) entry_blocks, total_entry_size(header));
 }
 
 
@@ -388,7 +413,7 @@ char *get_type_uuid_name(uuid to_be_identified) {
     struct predefined_type_uuid *i = predefined_type_uuids;
     while(1) {
 	if(!memcmp(to_be_identified, i->uuid, sizeof(uuid)))
-	    return &i->name;
+	    return i->name;
 	if(!memcmp(null_uuid, i->uuid, sizeof(uuid)))
 	    return NULL;
 	i++;
