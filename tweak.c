@@ -1,11 +1,9 @@
 #include "tweak.h"
 
-#define LBA_SIZE 512
-
 #define true 1
 #define false 0
 typedef uint8_t bool;
-typedef uint8_t lba[LBA_SIZE];
+typedef uint8_t block[512];
 typedef uint8_t uuid[16];
 
 struct uuid {
@@ -38,9 +36,9 @@ struct gpt_header {
 };
 
 void tweak(int fd);
-void read_lba(int fd, uint64_t index, lba *data);
-void hexdump_lba(lba *data);
-bool validate_gpt_header(lba *header);
+void read_block(int fd, uint64_t lba, block *data);
+void hexdump_block(block *data);
+bool validate_gpt_header(block *header);
 uint32_t crc32(uint32_t *data, size_t length);
 
 
@@ -107,38 +105,40 @@ int main(int argc, char **argv) {
 
 void tweak(int fd) {
     /*
-    lba legacy_mbr;
-    read_lba(fd, 0, &legacy_mbr);
+    block legacy_mbr;
+    read_block(fd, 0, &legacy_mbr);
     printf("Legacy MBR:\n");
-    hexdump_lba(&legacy_mbr);
+    hexdump_block(&legacy_mbr);
     */
 
-    lba header;
-    read_lba(fd, 1, &header);
-    if(!validate_gpt_header(&header)) {
+    block header_block;
+    read_block(fd, 1, &header_block);
+    if(!validate_gpt_header(&header_block)) {
 	describe_failure("The header doesn't validate.\n");
 	return;
     } else describe_success("The header validates.\n");
+
+    
 }
 
 
-void read_lba(int fd, uint64_t index, lba *data) {
-    ssize_t result = pread64(fd, data, sizeof(lba), index*sizeof(lba));
+void read_block(int fd, uint64_t lba, block *data) {
+    ssize_t result = pread64(fd, data, sizeof(block), lba*sizeof(block));
     if(result == -1) {
-	fprintf(stderr, "Unable to read LBA %Li: %s\n", index, strerror(errno));
+	fprintf(stderr, "Unable to read LBA %Li: %s\n", lba, strerror(errno));
 	exit(1);
     }
-    if(result != sizeof(lba)) {
-	fprintf(stderr, "Inexplicably got wrong amount of bytes for LBA %Li\n", index);
+    if(result != sizeof(block)) {
+	fprintf(stderr, "Inexplicably got wrong amount of bytes for LBA %Li\n", lba);
 	exit(1);
     }
 }
 
 
-void hexdump_lba(lba *data) {
+void hexdump_block(block *data) {
     int i;
 
-    for(i = 0; i < LBA_SIZE; i++) {
+    for(i = 0; i < sizeof(block); i++) {
 	if(i % 16 == 0) printf("%04X:  ", i);
 	else if(i % 16 == 8) printf("  ");
 	else if(i % 2 == 0) printf(" ");
@@ -167,10 +167,10 @@ XXXX:  aaaa aaaa aaaa aaaa  aaaa aaaa aaaa aaaa    ................
 */
 
 
-bool validate_gpt_header(lba *gpt_header_lba) {
+bool validate_gpt_header(block *header_block) {
     current_detail++;
     
-    struct gpt_header *header = (struct gpt_header *) gpt_header_lba;
+    struct gpt_header *header = (struct gpt_header *) header_block;
     bool result = true;
     
     if(strncmp(header->signature, "EFI PART", sizeof(header->signature))) {
@@ -194,19 +194,19 @@ bool validate_gpt_header(lba *gpt_header_lba) {
     } else describe_success("Header self-LBA okay.\n");
 
     size_t i;
-    for(i = header->header_size; i < LBA_SIZE; i++)
-	if((*gpt_header_lba)[i] != 0x00) break;
-    if(i != LBA_SIZE) {
+    for(i = header->header_size; i < sizeof(block); i++)
+	if((*header_block)[i] != 0x00) break;
+    if(i != sizeof(block)) {
 	describe_failure("GPT header followed by trailing garbage at offset %li.\n", i);
 	result = false;
     } else describe_success("GPT header correctly followed by zeroes.\n");
 
-    lba header_copy;
-    memcpy(header_copy, gpt_header_lba, sizeof(lba));
+    block header_copy;
+    memcpy(header_copy, header_block, sizeof(block));
     ((struct gpt_header *) header_copy)->header_crc32 = 0x00000000;
     uint32_t old_header_crc32 = header->header_crc32;
     size_t size_to_checksum = header->header_size;
-    if(size_to_checksum > LBA_SIZE) size_to_checksum = LBA_SIZE;
+    if(size_to_checksum > sizeof(block)) size_to_checksum = sizeof(block);
     uint32_t new_header_crc32 = efi_crc32((uint8_t *) &header_copy, size_to_checksum);
 
     if(old_header_crc32 != new_header_crc32) {
@@ -230,12 +230,12 @@ bool validate_gpt_header(lba *gpt_header_lba) {
 		     header->size_of_partition_entry);
     size_t total_entry_size
 	= header->number_of_partition_entries * header->size_of_partition_entry;
-    if(total_entry_size % LBA_SIZE == 0)
+    if(total_entry_size % sizeof(block) == 0)
 	describe_trivium("The entries occupy %li LBAs exactly.\n",
-			 total_entry_size / LBA_SIZE);
+			 total_entry_size / sizeof(block));
     else
 	describe_trivium("The entries don't end on an LBA boundary, occupying %f LBAs.\n",
-			 ((float) total_entry_size) / ((float) LBA_SIZE));
+			 ((float) total_entry_size) / ((float) sizeof(block)));
     describe_trivium("Header identifies its own CRC32 as 0x%08x and the entries' as 0x%08x.\n",
 		     header->header_crc32,
 		     header->partition_entry_array_crc32);
