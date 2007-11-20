@@ -5,6 +5,7 @@
 typedef uint8_t bool;
 typedef uint8_t block[512];
 typedef uint8_t uuid[16];
+typedef uint64_t lba;
 
 struct uuid {
     uint32_t time_low; // Little-endian.
@@ -22,12 +23,12 @@ struct gpt_header {
     uint32_t header_crc32;
     // assume this field zero then compute over the first header_size bytes
     uint32_t reserved; // must be zero
-    uint64_t my_lba;
-    uint64_t alternate_lba;
-    uint64_t first_usable_lba;
-    uint64_t last_usable_lba;
+    lba my_lba;
+    lba alternate_lba;
+    lba first_usable_lba;
+    lba last_usable_lba;
     uuid disk_uuid;
-    uint64_t partition_entry_lba;
+    lba partition_entry_lba;
     uint32_t number_of_partition_entries;
     uint32_t size_of_partition_entry; // must be a multiple of 8
     uint32_t partition_entry_array_crc32;
@@ -36,7 +37,7 @@ struct gpt_header {
 };
 
 void tweak(int fd);
-void read_block(int fd, uint64_t lba, block *data);
+void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 bool validate_gpt_header(block *header);
 uint32_t crc32(uint32_t *data, size_t length);
@@ -118,11 +119,12 @@ void tweak(int fd) {
 	return;
     } else describe_success("The header validates.\n");
 
+    struct gpt_header *header = (struct gpt_header *) &header_block;
     
 }
 
 
-void read_block(int fd, uint64_t lba, block *data) {
+void read_block(int fd, lba lba, block *data) {
     ssize_t result = pread64(fd, data, sizeof(block), lba*sizeof(block));
     if(result == -1) {
 	fprintf(stderr, "Unable to read LBA %Li: %s\n", lba, strerror(errno));
