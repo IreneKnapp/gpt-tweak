@@ -50,6 +50,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include "tweak.h"
 
 static const uint32_t crc32_tab[] = {
     0x00000000L, 0x77073096L, 0xee0e612cL, 0x990951baL, 0x076dc419L,
@@ -106,17 +107,30 @@ static const uint32_t crc32_tab[] = {
     0x2d02ef8dL
 };
 
-/* Return a 32-bit CRC of the contents of the buffer. */
 
 uint32_t efi_crc32(uint8_t *buf, size_t len) {
+    uint32_t v;
+    v = efi_crc32_start(buf, len);
+    return efi_crc32_end(v);
+}
+
+uint32_t efi_crc32_start(uint8_t *buf, size_t len) {
+    return efi_crc32_continue(buf, len, 0xFFFFFFFF);
+}
+
+uint32_t efi_crc32_continue(uint8_t *buf, size_t len, uint32_t seed) {
     size_t i;
     register uint32_t crc32val;
 
-    crc32val = 0xFFFFFFFF;
+    crc32val = seed;
     for (i = 0;  i < len;  i ++) {
 	crc32val =
 	    crc32_tab[(crc32val ^ buf[i]) & 0xff] ^
 	    (crc32val >> 8);
     }
-    return crc32val ^ 0xFFFFFFFF;
+    return crc32val;
+}
+
+uint32_t efi_crc32_end(uint32_t seed) {
+    return seed ^ 0xFFFFFFFF;
 }
