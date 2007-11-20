@@ -203,7 +203,7 @@ void tweak(int fd) {
 	swab_and_copy_uuid(&type_uuid, &entry->partition_type_uuid);
 	swab_and_copy_uuid(&partition_uuid, &entry->unique_partition_uuid);
 	
-	describe_trivium("Partion entry %Li, type uuid %s:\n",
+	describe_trivium("Partition entry %Li, type uuid %s:\n",
 			 i, uuid_to_ascii(type_uuid));
 	char *type_name = get_type_uuid_name(type_uuid);
 	if(type_name)
