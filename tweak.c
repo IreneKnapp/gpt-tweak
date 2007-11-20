@@ -36,19 +36,33 @@ struct gpt_header {
     // Remaining bytes must all be zero.
 };
 
+struct partition_entry {
+    uuid partition_type_uuid;
+    uuid unique_partition_uuid;
+    lba starting_lba;
+    lba ending_lba;
+    uint64_t attributes;
+    uint8_t partition_name[72];
+};
+
 void tweak(int fd);
 void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
+char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header);
 uint64_t total_entry_size(struct gpt_header *header);
+void swab_and_copy_uuid(uuid *target, uuid *source);
+void swab_uuid(uuid *uuid);
+void swab32(uint8_t *bytes);
+void swab16(uint8_t *bytes);
 
 
 
 int main(int argc, char **argv) {
-    cutoff_detail = 5;
-    describe_failures = 1;
-    describe_successes = 1;
-    describe_trivia = 1;
+    cutoff_detail = 9;
+    describe_failures = true;
+    describe_successes = true;
+    describe_trivia = true;
 
     char *devicename = NULL;
 
@@ -133,16 +147,19 @@ void tweak(int fd) {
 
     block *entry_blocks = malloc(n_entry_blocks * sizeof(block));
        
-    lba lba, i;
+    lba entry_lba, i;
     uint32_t array_crc = efi_crc32_start(NULL, 0);
-    for(i = 0, lba = first_entry_block; lba <= last_full_entry_block; lba++, i++) {
-	read_block(fd, lba, &(entry_blocks[i]));
-	array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
-				       sizeof(block), array_crc);
-    }
+    for(i = 0, entry_lba = first_entry_block;
+	entry_lba <= last_full_entry_block;
+	entry_lba++, i++)
+	{
+	    read_block(fd, entry_lba, &(entry_blocks[i]));
+	    array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
+					   sizeof(block), array_crc);
+	}
     if(size % sizeof(block) != 0) {
 	describe_trivium("There's a last odd block in the entry array, of size %Li.\n");
-	read_block(fd, lba, &(entry_blocks[i]));
+	read_block(fd, entry_lba, &(entry_blocks[i]));
 	array_crc = efi_crc32_continue((uint8_t *) &(entry_blocks[i]),
 				       size % sizeof(block), array_crc);
     }
@@ -152,6 +169,35 @@ void tweak(int fd) {
 	describe_failure("The entry array CRC32 doesn't validate.\n");
 	return;
     } else describe_success("The entry array CRC32 validates.\n");
+
+    lba n_zero_entries = 0;
+    for(i = 0; i < header->number_of_partition_entries; i++) {
+	struct partition_entry *entry
+	    = (struct partition_entry *) (((uint8_t *) entry_blocks)
+					  + i*header->size_of_partition_entry);
+	lba j;
+	for(j = 0; j < header->size_of_partition_entry; j++)
+	    if(((uint8_t *) entry)[j] != 0) break;
+	if(j == header->size_of_partition_entry) {
+	    n_zero_entries++;
+	    continue;
+	}
+
+	uuid type_uuid, partition_uuid;
+	swab_and_copy_uuid(&type_uuid, &entry->partition_type_uuid);
+	swab_and_copy_uuid(&partition_uuid, &entry->unique_partition_uuid);
+	
+	describe_trivium("Partion entry %Li, type uuid %s:\n",
+			 i, uuid_to_ascii(type_uuid));
+	describe_trivium("  Partition uuid %s.\n",
+			 uuid_to_ascii(partition_uuid));
+	describe_trivium("  From lba %Li to %Li, attributes 0x%016Lx.\n",
+			 entry->starting_lba, entry->ending_lba,
+			 entry->attributes);
+	describe_trivium("  And it has a name, too.\n");
+    }
+    describe_trivium("There are a total of %Li entries which are just zeroes.\n",
+		     n_zero_entries);
 }
 
 
@@ -198,6 +244,25 @@ XXXX:  aaaa aaaa aaaa aaaa  aaaa aaaa aaaa aaaa    ................
          1         2         3         4         5         6         7         8
 12345678901234567890123456789012345678901234567890123456789012345678901234567890
 */
+
+
+char *uuid_to_ascii(uuid uuid) {
+    static char result[37];
+    int i, j;
+    for(i = 0, j = 0; i < 16; i++, j+=2) {
+	switch(i) {
+	case 4:
+	case 6:
+	case 8:
+	case 10:
+	    result[j] = '-';
+	    j++;
+	}
+	sprintf(result + j, "%02x", uuid[i]);
+    }
+    result[36] = '\0';
+    return result;
+}
 
 
 bool validate_gpt_header(block *header_block) {
@@ -281,4 +346,39 @@ bool validate_gpt_header(block *header_block) {
 
 uint64_t total_entry_size(struct gpt_header *header) {
     return header->number_of_partition_entries * header->size_of_partition_entry;
+}
+
+
+void swab_and_copy_uuid(uuid *target, uuid *source) {
+    memcpy(target, source, sizeof(uuid));
+    swab_uuid(target);
+}
+
+
+void swab_uuid(uuid *uuid) {
+    uint8_t *bytes = (uint8_t *) uuid;
+    swab32(bytes);
+    swab16(bytes+4);
+    swab16(bytes+6);
+    swab16(bytes+8);
+}
+
+
+void swab32(uint8_t *bytes) {
+    uint8_t temp[4];
+
+    memcpy(temp, bytes, 4);
+    bytes[0] = temp[3];
+    bytes[1] = temp[2];
+    bytes[2] = temp[1];
+    bytes[3] = temp[0];
+}
+
+
+void swab16(uint8_t *bytes) {
+    uint8_t temp;
+
+    temp = bytes[0];
+    bytes[0] = bytes[1];
+    bytes[1] = temp;
 }
