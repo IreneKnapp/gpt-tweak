@@ -101,6 +101,7 @@ block *load_entry_array(int fd, struct gpt_header *header);
 bool validate_entry_array(struct gpt_header *header, block *entry_blocks);
 struct partition_entry *get_partition_entry(struct gpt_header *header,
 					    block *entry_blocks, lba index);
+void overwrite_entry_name_ascii(struct partition_entry *entry, char *ascii);
 uint32_t compute_header_crc32(block *header);
 uint32_t compute_entry_crc32(struct gpt_header *header, block *entry_blocks);
 uint64_t total_entry_size(struct gpt_header *header);
@@ -209,6 +210,8 @@ void tweak(int fd) {
     new_uuid = get_type_name_uuid("Apple HFS+ (or just HFS)");
 
     swab_and_copy_uuid(&entry->partition_type_uuid, new_uuid);
+
+    overwrite_entry_name_ascii(entry, "Crookshanks");
     
     //describe_trivium("\nBy the way, basic data is    %s\n", uuid_to_ascii(new_uuid));
     //describe_trivium("By the way, HFS+ is          %s\n", uuid_to_ascii(new_uuid));
@@ -489,6 +492,15 @@ struct partition_entry *get_partition_entry(struct gpt_header *header,
 					    block *entry_blocks, lba index) {
     return (struct partition_entry *) (((uint8_t *) entry_blocks)
 				       + index*header->size_of_partition_entry);
+}
+
+
+void overwrite_entry_name_ascii(struct partition_entry *entry, char *ascii) {
+    bzero(&entry->partition_name, sizeof(entry->partition_name));
+
+    int i;
+    for(i = 0; ascii[i]; i++)
+	entry->partition_name[2*i] = ascii[i];
 }
 
 
