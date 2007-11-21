@@ -93,6 +93,7 @@ struct predefined_type_uuid predefined_type_uuids[] = {
 
 void tweak(int fd);
 void read_block(int fd, lba lba, block *data);
+void write_block(lba lba, block *data);
 void hexdump_block(block *data);
 char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header, lba expected_lba);
@@ -243,6 +244,10 @@ void tweak(int fd) {
 	describe_failure("The patched backup header doesn't validate.\n");
 	return;
     } else describe_success("The patched backup header validates.\n");
+
+    write_block(1, &header_block);
+    write_block(2, entry_blocks);
+    write_block(header->alternate_lba, &backup_header_block);
 }
 
 
@@ -256,6 +261,30 @@ void read_block(int fd, lba lba, block *data) {
 	fprintf(stderr, "Inexplicably got wrong amount of bytes for LBA %Li\n", lba);
 	exit(1);
     }
+}
+
+
+void write_block(lba output_lba, block *data) {
+    char filename[64];
+    sprintf(filename, "new-%Li.lba", output_lba);
+    
+    int out_fd = open64(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if(out_fd == -1) {
+	fprintf(stderr, "Unable to open %s: %s\n", filename, strerror(errno));
+	return;
+    }
+
+    printf("size is %li\n", sizeof(block));
+    //ssize_t result = pwrite64(out_fd, data, sizeof(block), 0);
+    ssize_t result = write(out_fd, data, sizeof(block));
+    if(result != sizeof(block)) {
+	fprintf(stderr, "Unable to write %li bytes, only wrote %li.\n",
+		sizeof(block), result);
+    }
+    
+    close(out_fd);
+
+    printf("OKAY, you will find output in %s!\n", filename);
 }
 
 
