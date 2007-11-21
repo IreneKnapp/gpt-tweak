@@ -47,7 +47,7 @@ struct partition_entry {
 
 struct predefined_type_uuid {
     uuid uuid;
-    char name[32];
+    char name[128];
 };
 
 // The bytes in this list are given in "presentation order" as defined by EFI; this means
@@ -61,6 +61,9 @@ struct predefined_type_uuid predefined_type_uuids[] = {
     { { 0xC1, 0x2A, 0x73, 0x28, 0xF8, 0x1F, 0x11, 0xd2,
 	0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B },
       "EFI system partition" },
+    { { 0x02, 0x4D, 0xEE, 0x41, 0x33, 0xE7, 0x11, 0xd3,
+	0x9D, 0x69, 0x00, 0x08, 0xC7, 0x81, 0xF3, 0x9F },
+      "Partition to hold an MBR, which EFI considers legacy" },
     { { 0x48, 0x46, 0x53, 0x00, 0x00, 0x00, 0x11, 0xAA,
 	0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC },
       "Apple HFS+ (or just HFS)" },
@@ -382,14 +385,13 @@ bool validate_entry_array(struct gpt_header *header, block *entry_blocks) {
 	uuid type_uuid, partition_uuid;
 	swab_and_copy_uuid(&type_uuid, &entry->partition_type_uuid);
 	swab_and_copy_uuid(&partition_uuid, &entry->unique_partition_uuid);
-	
-	describe_trivium("Partition entry %Li, type uuid %s:\n",
-			 i, uuid_to_ascii(type_uuid));
+
 	char *type_name = get_type_uuid_name(type_uuid);
-	if(type_name)
-	    describe_trivium("  That's %s.\n", type_name);
-	else
-	    describe_trivium("  That's an unknown type, to me.\n");
+	if(!type_name) type_name = "An unknown type, to me.";
+	
+	describe_trivium("%Li: %s\n", i, type_name);
+	describe_trivium("  Type uuid %s.\n",
+			 uuid_to_ascii(type_uuid));
 	describe_trivium("  Partition uuid %s.\n",
 			 uuid_to_ascii(partition_uuid));
 	describe_trivium("  From lba %Li to %Li, attributes 0x%016Lx.\n",
