@@ -95,7 +95,7 @@ void tweak(int fd);
 void read_block(int fd, lba lba, block *data);
 void hexdump_block(block *data);
 char *uuid_to_ascii(uuid uuid);
-bool validate_gpt_header(block *header);
+bool validate_gpt_header(block *header, lba expected_lba);
 block *load_entry_array(int fd, struct gpt_header *header);
 bool validate_entry_array(struct gpt_header *header, block *entry_blocks);
 struct partition_entry *get_partition_entry(struct gpt_header *header,
@@ -184,7 +184,7 @@ void tweak(int fd) {
     
     block header_block;
     read_block(fd, 1, &header_block);
-    if(!validate_gpt_header(&header_block)) {
+    if(!validate_gpt_header(&header_block, 1)) {
 	describe_failure("The header doesn't validate.\n");
 	return;
     } else describe_success("The header validates.\n");
@@ -200,10 +200,49 @@ void tweak(int fd) {
 	return;
     } else describe_success("The entry array validates.\n");
 
-    uuid *new_uuid = get_type_name_uuid("Basic data partition (could be Windows or Linux!)");
-    describe_trivium("\nBy the way, basic data is    %s\n", uuid_to_ascii(new_uuid));
+    printf("\nPatching the entry array to my very specific requirements.\n");
+
+    struct partition_entry *entry = get_partition_entry(header, entry_blocks, 1);
+    uuid *new_uuid;
+    //new_uuid = get_type_name_uuid("Basic data partition (could be Windows or Linux!)");
     new_uuid = get_type_name_uuid("Apple HFS+ (or just HFS)");
-    describe_trivium("By the way, HFS+ is          %s\n", uuid_to_ascii(new_uuid));
+
+    swab_and_copy_uuid(&entry->partition_type_uuid, new_uuid);
+    
+    //describe_trivium("\nBy the way, basic data is    %s\n", uuid_to_ascii(new_uuid));
+    //describe_trivium("By the way, HFS+ is          %s\n", uuid_to_ascii(new_uuid));
+
+    printf("\nPatching the checksums in the header, in effect accepting the changes.\n");
+    uint32_t new_array_crc32 = compute_entry_crc32(header, entry_blocks);
+    header->partition_entry_array_crc32 = new_array_crc32;
+
+    if(!validate_entry_array(header, entry_blocks)) {
+	describe_failure("The patched entry array doesn't validate.\n");
+	return;
+    } else describe_success("The patched entry array validates.\n");
+
+    uint32_t new_header_crc32 = compute_header_crc32(&header_block);
+    header->header_crc32 = new_header_crc32;
+
+    if(!validate_gpt_header(&header_block, 1)) {
+	describe_failure("The patched header doesn't validate.\n");
+	return;
+    } else describe_success("The patched header validates.\n");
+
+    describe_trivium("\nCreating the patched backup header, based on the patched header.\n");
+
+    block backup_header_block;
+    memcpy(&backup_header_block, &header_block, sizeof(block));
+    struct gpt_header *backup_header = (struct gpt_header *) backup_header_block;
+    backup_header->my_lba = header->alternate_lba;
+    backup_header->alternate_lba = header->my_lba;
+    uint32_t new_backup_header_crc32 = compute_header_crc32(&backup_header_block);
+    backup_header->header_crc32 = new_backup_header_crc32;
+
+    if(!validate_gpt_header(&backup_header_block, header->alternate_lba)) {
+	describe_failure("The patched backup header doesn't validate.\n");
+	return;
+    } else describe_success("The patched backup header validates.\n");
 }
 
 
@@ -271,7 +310,7 @@ char *uuid_to_ascii(uuid uuid) {
 }
 
 
-bool validate_gpt_header(block *header_block) {
+bool validate_gpt_header(block *header_block, lba expected_lba) {
     current_detail++;
     
     struct gpt_header *header = (struct gpt_header *) header_block;
@@ -292,7 +331,7 @@ bool validate_gpt_header(block *header_block) {
 	result = false;
     } else describe_success("Header reserved field okay.\n");
 
-    if(header->my_lba != 1) {
+    if(header->my_lba != expected_lba) {
 	describe_failure("GPT header mis-identifies its own LBA, as %Li.\n", header->my_lba);
 	result = false;
     } else describe_success("Header self-LBA okay.\n");
