@@ -98,10 +98,13 @@ char *uuid_to_ascii(uuid uuid);
 bool validate_gpt_header(block *header);
 block *load_entry_array(int fd, struct gpt_header *header);
 bool validate_entry_array(struct gpt_header *header, block *entry_blocks);
+struct partition_entry *get_partition_entry(struct gpt_header *header,
+					    block *entry_blocks, lba index);
 uint32_t compute_header_crc32(block *header);
 uint32_t compute_entry_crc32(struct gpt_header *header, block *entry_blocks);
 uint64_t total_entry_size(struct gpt_header *header);
 char *get_type_uuid_name(uuid uuid);
+uuid *get_type_name_uuid(char *to_be_found);
 void swab_and_copy_uuid(uuid *target, uuid *source);
 void swab_uuid(uuid *uuid);
 void swab32(uint8_t *bytes);
@@ -196,6 +199,11 @@ void tweak(int fd) {
 	describe_failure("The entry array doesn't validate.\n");
 	return;
     } else describe_success("The entry array validates.\n");
+
+    uuid *new_uuid = get_type_name_uuid("Basic data partition (could be Windows or Linux!)");
+    describe_trivium("\nBy the way, basic data is    %s\n", uuid_to_ascii(new_uuid));
+    new_uuid = get_type_name_uuid("Apple HFS+ (or just HFS)");
+    describe_trivium("By the way, HFS+ is          %s\n", uuid_to_ascii(new_uuid));
 }
 
 
@@ -375,9 +383,7 @@ bool validate_entry_array(struct gpt_header *header, block *entry_blocks) {
     lba n_zero_entries = 0;
     lba i;
     for(i = 0; i < header->number_of_partition_entries; i++) {
-	struct partition_entry *entry
-	    = (struct partition_entry *) (((uint8_t *) entry_blocks)
-					  + i*header->size_of_partition_entry);
+	struct partition_entry *entry = get_partition_entry(header, entry_blocks, i);
 	lba j;
 	for(j = 0; j < header->size_of_partition_entry; j++)
 	    if(((uint8_t *) entry)[j] != 0) break;
@@ -408,6 +414,13 @@ bool validate_entry_array(struct gpt_header *header, block *entry_blocks) {
 
     current_detail--;
     return result;
+}
+
+
+struct partition_entry *get_partition_entry(struct gpt_header *header,
+					    block *entry_blocks, lba index) {
+    return (struct partition_entry *) (((uint8_t *) entry_blocks)
+				       + index*header->size_of_partition_entry);
 }
 
 
@@ -445,6 +458,22 @@ char *get_type_uuid_name(uuid to_be_identified) {
     while(1) {
 	if(!memcmp(to_be_identified, i->uuid, sizeof(uuid)))
 	    return i->name;
+	if(!memcmp(null_uuid, i->uuid, sizeof(uuid)))
+	    return NULL;
+	i++;
+    }
+}
+
+
+uuid *get_type_name_uuid(char *to_be_found) {
+    uuid null_uuid;
+
+    bzero(&null_uuid, sizeof(null_uuid));
+
+    struct predefined_type_uuid *i = predefined_type_uuids;
+    while(1) {
+	if(!strcmp(to_be_found, i->name))
+	    return &(i->uuid);
 	if(!memcmp(null_uuid, i->uuid, sizeof(uuid)))
 	    return NULL;
 	i++;
