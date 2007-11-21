@@ -206,12 +206,15 @@ void tweak(int fd) {
 
     struct partition_entry *entry = get_partition_entry(header, entry_blocks, 1);
     uuid *new_uuid;
-    //new_uuid = get_type_name_uuid("Basic data partition (could be Windows or Linux!)");
     new_uuid = get_type_name_uuid("Apple HFS+ (or just HFS)");
 
     swab_and_copy_uuid(&entry->partition_type_uuid, new_uuid);
 
     overwrite_entry_name_ascii(entry, "Crookshanks");
+
+    entry = get_partition_entry(header, entry_blocks, 2);
+    new_uuid = get_type_name_uuid("Basic data partition (could be Windows or Linux!)");
+    swab_and_copy_uuid(&entry->partition_type_uuid, new_uuid);
     
     //describe_trivium("\nBy the way, basic data is    %s\n", uuid_to_ascii(new_uuid));
     //describe_trivium("By the way, HFS+ is          %s\n", uuid_to_ascii(new_uuid));
